@@ -1,0 +1,48 @@
+version: ‘3’
+services:
+  Jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: myjenkins-blueocean:2.346.1-1 
+    privileged: true
+    user: root
+    ports:
+      - 49000:8080
+      - 50000:50000
+    container_name: jenkins-blueocean
+    environment:
+      - JAVA_OPTS="-Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true"
+      - DOCKER_HOST=tcp://docker:2376
+      - DOCKER_CERT_PATH=/certs/client
+      - DOCKER_TLS_VERIFY=1
+    volumes:
+      - /home/restuagungparama/Dicoding/jenkins/jenkins_data:/var/jenkins_home
+      - jenkins-docker-certs:/certs/client:ro
+      # - /var/run/docker.sock:/var/run/docker.sock
+      - /home:/home
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - 9091:9090
+    volumes:
+      - /home/restuagungparama/Dicoding/jenkins/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - 3031:3030
+    environment:
+      - GF_SERVER_HTTP_PORT=3030
+      
+volumes:
+  jenkins-docker-certs:
+    external:
+      name: jenkins-docker-certs
+networks:
+  default:
+    external:
+      name: jenkins
