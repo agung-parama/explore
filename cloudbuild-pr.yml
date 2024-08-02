@@ -103,3 +103,4 @@ availableSecrets:
     env: 'GH_TOKEN'
   - versionName: "projects/$PROJECT_ID/secrets/INFRA_GL_SONARQUBE_TOKEN/versions/latest"
     env: 'SCA_TOKEN'
+tags: ['agung-parama/explore', 'pull-request']
