@@ -7,3 +7,5 @@ timeout: 1m
 
 options:
   machineType: 'E2_MEDIUM'
+
+tags: ['explore', 'shell-check']
