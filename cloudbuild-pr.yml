@@ -1,0 +1,105 @@
+steps:
+- id: Restore Cache
+  name: 'gcr.io/$PROJECT_ID/cache'
+  entrypoint: '/bin/restore_cache'
+  dir: 'packages/${_MODULE}'
+  args:
+  - '--bucket=gs://${_GCS_CACHE_BUCKET}/cache/${_PROJECT}'
+  - '--key=${_MODULE}'
+
+- id: Build
+  name: gcr.io/cloud-builders/docker
+  args:
+    - 'compose'
+    - '--file=docker-compose.gcb.yml'
+    - 'run'
+    - '--rm'
+    - '${_MODULE}'
+  env:
+    - 'MODULE=${_MODULE}'
+  waitFor:
+    - 'Restore Cache'
+
+- id: Run SCA
+  name: gcr.io/$PROJECT_ID/secops
+  dir: 'packages/${_MODULE}'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - 'export WORKSPACE=$(pwd); bash /opt/sq.sh'
+  env:
+    - 'PROJECT_ID=$PROJECT_ID'
+    - 'CI_PR_NUMBER=${_PR_NUMBER}'
+    - 'CI_BRANCH=${BRANCH_NAME}'
+    - 'CI_BASE_BRANCH=${_BASE_BRANCH}'
+  secretEnv:
+    - 'SCA_TOKEN'
+
+- id: Dockerfile Linter
+  name: 'hadolint/hadolint:latest-alpine'
+  dir: 'packages/${_MODULE}'
+  entrypoint: hadolint
+  args: ['--failure-threshold', 'style', 'Dockerfile']
+  waitFor: ['-']
+
+- id: Build Image
+  name: gcr.io/cloud-builders/docker
+  dir: 'packages/${_MODULE}'
+  args:
+    - 'build'
+    - '-t'
+    - '${_REGISTRY_URL}/${_PROJECT}-${_MODULE}:${SHORT_SHA}'
+    - '-t'
+    - '${_REGISTRY_URL}/${_PROJECT}-${_MODULE}'
+    - '.'
+  waitFor:
+    - 'Build'
+
+- id: Trivy Scan
+  name: gcr.io/$PROJECT_ID/trivyscan
+  entrypoint: 'bash'
+  args: ['trivyscan', '${_REGISTRY_URL}/${_PROJECT}-${_MODULE}:${SHORT_SHA}', 'scan-result.txt' ]
+  waitFor:
+    - 'Build Image'
+
+- id: Show Scan Result to Pull Request comment
+  name: gcr.io/$PROJECT_ID/github
+  entrypoint: /root/comment-pr-trivy.sh
+  args:
+    - 'scan-result.txt'
+  env:
+    - 'REPOSITORY=${_GITHUB_USER}/${REPO_NAME}'
+    - 'COMMIT_ID=${REVISION_ID}'
+    - 'TITLE=Trivy Result: ${_REGISTRY_URL}/${_PROJECT}-${_MODULE}:${SHORT_SHA}'
+  secretEnv:
+    - 'GH_TOKEN'
+
+- id: Check Trivy Result
+  name: gcr.io/$PROJECT_ID/trivyscan
+  entrypoint: /root/check.sh
+  args: ['scan-result.txt']
+  allowFailure: false
+
+timeout: 15m
+
+substitutions:
+  _GCS_CACHE_BUCKET: 'infra-ci-artifact'
+  _GITHUB_USER: 'GDP-ADMIN'
+  _REGISTRY_URL: '${_AWS_ACCOUNT_ID}.dkr.ecr.${_AWS_REGION}.amazonaws.com'
+  _PROJECT: 'mocha'
+  _AWS_REGION: 'ap-southeast-1'
+  _AWS_ACCOUNT_ID: '112233445566'
+
+options:
+  env:
+    - 'DOCKER_BUILDKIT=1'
+    - 'COMPOSE_DOCKER_CLI_BUILD=1'
+    - 'SONAR_USER_HOME=.cache'
+    - 'XDG_CACHE_HOME=.cache'
+
+availableSecrets:
+  secretManager:
+  - versionName: "projects/$PROJECT_ID/secrets/INFRA_GL_GITHUB_TOKEN/versions/latest"
+    env: 'GH_TOKEN'
+  - versionName: "projects/$PROJECT_ID/secrets/INFRA_GL_SONARQUBE_TOKEN/versions/latest"
+    env: 'SCA_TOKEN'

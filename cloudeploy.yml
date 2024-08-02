@@ -1,0 +1,36 @@
+steps:
+- id: Deployment
+  name: 'gcr.io/$PROJECT_ID/deployer'
+  dir: 'packages/${_MODULE}'
+  entrypoint: 'bash'
+  args: ['./deploy.sh']
+  env:
+    - 'PROJECT=${_PROJECT}'
+    - 'MODULE=${_MODULE}'
+    - 'COMMIT_ID=${_COMMIT_ID}'
+    - 'ENVIRONMENT=${_ENVIRONMENT}'
+    - 'FULL_PATH_IMAGE=${_REGISTRY_URL}/${_PROJECT}-${_MODULE}'
+    - 'CLUSTER_NAME=${_CLUSTER_NAME}'
+    - 'AWS_REGION=${_AWS_REGION}'
+  secretEnv:
+    - 'AWS_ACCESS_KEY_ID'
+    - 'AWS_SECRET_ACCESS_KEY'
+
+timeout: 15m
+
+substitutions:
+  _REGISTRY_URL: '${_AWS_ACCOUNT_ID}.dkr.ecr.${_AWS_REGION}.amazonaws.com'
+  _PROJECT: mocha
+
+options:
+  machineType: 'E2_MEDIUM'
+  env:
+    - 'DOCKER_BUILDKIT=1'
+    - 'COMPOSE_DOCKER_CLI_BUILD=1'
+
+availableSecrets:
+  secretManager:
+  - versionName: "projects/$PROJECT_ID/secrets/${_AWS_ACCESS_KEY_SECRET_NAME}/versions/latest"
+    env: 'AWS_ACCESS_KEY_ID'
+  - versionName: "projects/$PROJECT_ID/secrets/${_AWS_SECRET_KEY_SECRET_NAME}/versions/latest"
+    env: 'AWS_SECRET_ACCESS_KEY'

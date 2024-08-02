@@ -1,0 +1,145 @@
+steps:
+- id: Restore Cache
+  name: 'gcr.io/$PROJECT_ID/cache'
+  entrypoint: '/bin/restore_cache'
+  dir: 'packages/${_MODULE}'
+  args:
+  - '--bucket=gs://${_GCS_CACHE_BUCKET}/cache/${_PROJECT}'
+  - '--key=${_MODULE}'
+
+- id: Build
+  name: gcr.io/cloud-builders/docker
+  args:
+    - 'compose'
+    - '--file=docker-compose.gcb.yml'
+    - 'run'
+    - '--rm'
+    - '${_MODULE}'
+  env:
+    - 'MODULE=${_MODULE}'
+  waitFor:
+    - 'Restore Cache'
+
+- id: Run SCA
+  name: gcr.io/$PROJECT_ID/secops
+  dir: 'packages/${_MODULE}'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - '[ -f "sonar-project.properties" ] && export WORKSPACE=$(pwd) && bash /opt/sq.sh || echo "No sonar-project.propeties found. Skipped."'
+  env:
+    - 'PROJECT_ID=$PROJECT_ID'
+    - 'CI_PR_NUMBER=${_PR_NUMBER}'
+    - 'CI_BRANCH=${BRANCH_NAME}'
+    - 'CI_BASE_BRANCH=${_BASE_BRANCH}'
+  secretEnv:
+    - 'SCA_TOKEN'
+
+- id: Export ECR Password
+  name: gcr.io/$PROJECT_ID/deployer
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - 'aws ecr get-login-password --region ${_AWS_REGION} > token.key'
+  secretEnv:
+    - 'AWS_ACCESS_KEY_ID'
+    - 'AWS_SECRET_ACCESS_KEY'
+  waitFor: ['-']
+
+- id: Login ECR
+  name: gcr.io/cloud-builders/docker
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - 'docker login --username AWS --password-stdin ${_REGISTRY_URL} < token.key'
+  waitFor:
+    - 'Export ECR Password'
+
+- id: Build Image
+  name: gcr.io/cloud-builders/docker
+  dir: 'packages/${_MODULE}'
+  args:
+    - 'build'
+    - '-t'
+    - '${_REGISTRY_URL}/${_PROJECT}-${_MODULE}:${SHORT_SHA}'
+    - '-t'
+    - '${_REGISTRY_URL}/${_PROJECT}-${_MODULE}:${_ENVIRONMENT}'
+    - '--cache-from'
+    - '${_REGISTRY_URL}/${_PROJECT}-${_MODULE}:${_ENVIRONMENT}'
+    - '--label'
+    - 'COMMIT_ID=${SHORT_SHA}'
+    - '--build-arg'
+    - 'BUILDKIT_INLINE_CACHE=1'
+    - '.'
+  waitFor:
+    - 'Build'
+
+- id: Saving Cache
+  name: gcr.io/$PROJECT_ID/cache
+  entrypoint: '/bin/save_cache'
+  dir: 'packages/${_MODULE}'
+  args:
+    - '--bucket=gs://${_GCS_CACHE_BUCKET}/cache/${_PROJECT}/'
+    - '--key=${_MODULE}'
+    - '--path=.cache'
+    - '--path=.scannerwork'
+  waitFor:
+    - 'Run SCA'
+    - 'Build'
+
+- id: Push Image to ECR
+  name: gcr.io/cloud-builders/docker
+  args: ['push', '-a', '${_REGISTRY_URL}/${_PROJECT}-${_MODULE}']
+  waitFor:
+    - 'Build Image'
+
+- id: Run Deployment
+  name: gcr.io/cloud-builders/gcloud
+  script: |
+    #!/bin/bash
+    set -xe
+    if [[ ${ENVIRONMENT} =~ prod ]]; then
+      gcloud beta builds triggers run ${ENVIRONMENT}-${PROJECT}-deployment \
+        --substitutions _COMMIT_ID=${SHORT_SHA},_MODULE=${MODULE},_ENVIRONMENT=${ENVIRONMENT} \
+        --sha ${COMMIT_SHA} \
+        --region ${LOCATION}
+    else
+      gcloud beta builds triggers run ${ENVIRONMENT}-${PROJECT}-deployment \
+        --substitutions _COMMIT_ID=${SHORT_SHA},_MODULE=${MODULE},_ENVIRONMENT=${ENVIRONMENT} \
+        --branch ${BRANCH_NAME} \
+        --region ${LOCATION}
+    fi
+  env:
+    - 'ENVIRONMENT=${_ENVIRONMENT}'
+    - 'BRANCH_NAME=${BRANCH_NAME}'
+    - 'SHORT_SHA=${SHORT_SHA}'
+    - 'COMMIT_SHA=${COMMIT_SHA}'
+    - 'LOCATION=${LOCATION}'
+    - 'TAG_NAME=${TAG_NAME}'
+    - 'PROJECT=${_PROJECT}'
+    - 'MODULE=${_MODULE}'
+  waitFor:
+    - 'Push Image to ECR'
+
+timeout: 15m
+
+substitutions:
+  _GCS_CACHE_BUCKET: 'infra-ci-artifact'
+  _REGISTRY_URL: '${_AWS_ACCOUNT_ID}.dkr.ecr.${_AWS_REGION}.amazonaws.com'
+  _PROJECT: 'mocha'
+
+options:
+  env:
+    - 'DOCKER_BUILDKIT=1'
+    - 'COMPOSE_DOCKER_CLI_BUILD=1'
+    - 'SONAR_USER_HOME=.cache'
+    - 'XDG_CACHE_HOME=.cache'
+
+availableSecrets:
+  secretManager:
+  - versionName: "projects/$PROJECT_ID/secrets/INFRA_GL_SONARQUBE_TOKEN/versions/latest"
+    env: 'SCA_TOKEN'
+  - versionName: "projects/$PROJECT_ID/secrets/${_AWS_ACCESS_KEY_SECRET_NAME}/versions/latest"
+    env: 'AWS_ACCESS_KEY_ID'
+  - versionName: "projects/$PROJECT_ID/secrets/${_AWS_SECRET_KEY_SECRET_NAME}/versions/latest"
+    env: 'AWS_SECRET_ACCESS_KEY'
