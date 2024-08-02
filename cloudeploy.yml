@@ -34,3 +34,5 @@ availableSecrets:
     env: 'AWS_ACCESS_KEY_ID'
   - versionName: "projects/$PROJECT_ID/secrets/${_AWS_SECRET_KEY_SECRET_NAME}/versions/latest"
     env: 'AWS_SECRET_ACCESS_KEY'
+
+tags: ['explore', 'release', 'deploy']
