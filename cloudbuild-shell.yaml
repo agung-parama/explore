@@ -1,0 +1,11 @@
+steps:
+- id: Shell Lint
+  name: 'gcr.io/$PROJECT_ID/shellcheck'
+  args: ['**/*.sh']
+
+timeout: 1m
+
+options:
+  machineType: 'E2_MEDIUM'
+
+tags: ['gen-ai-vowel', 'shell']
